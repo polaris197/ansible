@@ -206,7 +206,7 @@ options:
     local:
         description:
             - Forces the use of "local" command alternatives on platforms that implement it.
-            - This is useful in environments that use centralized authentification when you want to manipulate the local users
+            - This is useful in environments that use centralized authentication when you want to manipulate the local users
               (i.e. it uses C(luseradd) instead of C(useradd)).
             - This will check C(/etc/passwd) for an existing account before invoking commands. If the local account database
               exists somewhere other than C(/etc/passwd), this setting will not work properly.
@@ -2858,9 +2858,9 @@ def main():
             ssh_key_file=dict(type='path'),
             ssh_key_comment=dict(type='str', default=ssh_defaults['comment']),
             ssh_key_passphrase=dict(type='str', no_log=True),
-            update_password=dict(type='str', default='always', choices=['always', 'on_create']),
+            update_password=dict(type='str', default='always', choices=['always', 'on_create'], no_log=False),
             expires=dict(type='float'),
-            password_lock=dict(type='bool'),
+            password_lock=dict(type='bool', no_log=False),
             local=dict(type='bool'),
             profile=dict(type='str'),
             authorization=dict(type='str'),
