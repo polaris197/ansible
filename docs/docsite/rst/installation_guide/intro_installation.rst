@@ -84,11 +84,12 @@ Which Ansible version to install is based on your particular needs. You can choo
 
 * Install the latest release with your OS package manager (for Red Hat Enterprise Linux (TM), CentOS, Fedora, Debian, or Ubuntu).
 * Install with ``pip`` (the Python package manager).
-* Install from source to access the development (``devel``) version to use and test the latest features.
+* Install from source to access the development (``devel``) version to develop or test the latest features.
 
+.. note::
 
-Because Ansible runs so easily from source and does not require any installation of software on remote
-machines, many users will actually track the development version.
+	You should only run Ansible from ``devel`` if you are modifying the Ansible engine, or trying out features under development. This is a rapidly changing source of code and can become unstable at any point.
+
 
 Ansible creates new releases two to three times a year. Due to this short release cycle,
 minor bugs will generally be fixed in the next release versus maintaining backports on the stable branch.
@@ -238,7 +239,7 @@ Installing Ansible on macOS
 
 The preferred way to install Ansible on a Mac is with ``pip``.
 
-The instructions can be found in :ref:`from_pip`. If you are running macOS version 10.12 or older, then you should upgrade to the latest ``pip`` to connect to the Python Package Index securely.
+The instructions can be found in :ref:`from_pip`. If you are running macOS version 10.12 or older, then you should upgrade to the latest ``pip`` to connect to the Python Package Index securely. It should be noted that pip must be run as a module on macOS, and the linked ``pip`` instructions will show you how to do that.
 
 .. _from_pkgutil:
 
@@ -299,7 +300,7 @@ Update of the software will be managed by the swupd tool::
 Installing Ansible with ``pip``
 --------------------------------
 
-Ansible can be installed with ``pip``, the Python package manager.  If ``pip`` isn't already available on your system of Python, run the following commands to install it::
+Ansible can be installed with ``pip``, the Python package manager. It should be noted that macOS requires a slightly different use of ``pip`` than ``*nix`` due to ``openssl`` requirements, therefore pip must be run as a module.  If ``pip`` isn't already available on your system of Python, run the following commands to install it::
 
     $ curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
     $ python get-pip.py --user
@@ -308,9 +309,17 @@ Then install Ansible [1]_::
 
     $ pip install --user ansible
 
+For macOS, there is no need to use ``sudo`` or install additional fixes, simply access the Python module namespace for ``pip``::
+
+    $ python -m pip install --user ansible
+
 Or if you are looking for the development version::
 
     $ pip install --user git+https://github.com/ansible/ansible.git@devel
+
+For macOS::
+
+    $ python -m pip install --user git+https://github.com/ansible/ansible.git@devel
 
 If you are installing on macOS Mavericks (10.9), you may encounter some noise from your compiler. A workaround is to do the following::
 
@@ -319,6 +328,10 @@ If you are installing on macOS Mavericks (10.9), you may encounter some noise fr
 In order to use the ``paramiko`` connection plugin or modules that require ``paramiko``, install the required module [2]_::
 
     $ pip install --user paramiko
+
+For macOS::
+
+    $ python -m pip install --user paramiko
 
 Ansible can also be installed inside a new or existing ``virtualenv``::
 
@@ -348,13 +361,13 @@ If you wish to install Ansible globally, run the following commands::
 Running Ansible from source (devel)
 -----------------------------------
 
+.. note::
+
+	You should only run Ansible from ``devel`` if you are modifying the Ansible engine, or trying out features under development. This is a rapidly changing source of code and can become unstable at any point.
+
 Ansible is easy to run from source. You do not need ``root`` permissions
 to use it and there is no software to actually install. No daemons
-or database setup are required. Because of this, many users in our community use the
-development version of Ansible all of the time so they can take advantage of new features
-when they are implemented and easily contribute to the project. Because there is
-nothing to install, following the development version is significantly easier than most
-open source projects.
+or database setup are required.
 
 .. note::
 

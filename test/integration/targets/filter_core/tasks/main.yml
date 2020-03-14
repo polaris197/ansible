@@ -136,6 +136,82 @@
     - "'Ansible - くらとみ\n' | b64encode(encoding='utf-16-le') == 'QQBuAHMAaQBiAGwAZQAgAC0AIABPMIkwaDB/MAoA'"
     - "'QQBuAHMAaQBiAGwAZQAgAC0AIABPMIkwaDB/MAoA' | b64decode(encoding='utf-16-le') == 'Ansible - くらとみ\n'"
 
+- set_fact:
+    x:
+      x: x
+      key: x
+    y:
+      y: y
+      key: y
+    z:
+      z: z
+      key: z
+
+    # Most complicated combine dicts from the documentation
+    default:
+      a:
+        a':
+          x: default_value
+          y: default_value
+          list:
+            - default_value
+      b:
+        - 1
+        - 1
+        - 2
+        - 3
+    patch:
+      a:
+        a':
+          y: patch_value
+          z: patch_value
+          list:
+            - patch_value
+      b:
+        - 3
+        - 4
+        - 4
+        - key: value
+    result:
+      a:
+        a':
+          x: default_value
+          y: patch_value
+          z: patch_value
+          list:
+            - default_value
+            - patch_value
+      b:
+        - 1
+        - 1
+        - 2
+        - 3
+        - 4
+        - 4
+        - key: value
+
+- name: Verify combine filter
+  assert:
+    that:
+      - "([x] | combine) == x"
+      - "(x | combine(y)) == {'x': 'x', 'y': 'y', 'key': 'y'}"
+      - "(x | combine(y, z)) == {'x': 'x', 'y': 'y', 'z': 'z', 'key': 'z'}"
+      - "([x, y, z] | combine) == {'x': 'x', 'y': 'y', 'z': 'z', 'key': 'z'}"
+      - "([x, y] | combine(z)) == {'x': 'x', 'y': 'y', 'z': 'z', 'key': 'z'}"
+      # more advance dicts combination tests are done in "merge_hash" function unit tests
+      # but even it's redundant with those unit tests, we do at least the most complicated exemple of the documentation here
+      - "(default | combine(patch, recursive=True, list_merge='append_rp')) == result"
+
+- set_fact:
+    combine: "{{[x, [y]] | combine(z)}}"
+  ignore_errors: yes
+  register: result
+
+- name: Ensure combining objects which aren't dictionaries throws an error
+  assert:
+    that:
+      - "result.msg.startswith(\"failed to combine variables, expected dicts but got\")"
+
 - name: Ensure combining two dictionaries containing undefined variables provides a helpful error
   block:
     - set_fact:
@@ -160,12 +236,28 @@
         that:
           - "result.msg.startswith('The task includes an option with an undefined variable')"
 
-    - set_fact:
-        key2: is_defined
+- name: regex_search
+  set_fact:
+    match_case: "{{ 'hello' | regex_search('HELLO', ignorecase=false) }}"
+    ignore_case: "{{ 'hello' | regex_search('HELLO', ignorecase=true) }}"
+    single_line: "{{ 'hello\nworld' | regex_search('^world', multiline=false) }}"
+    multi_line: "{{ 'hello\nworld' | regex_search('^world', multiline=true) }}"
+    named_groups: "{{ 'goodbye' | regex_search('(?P<first>good)(?P<second>bye)', '\\g<second>', '\\g<first>') }}"
+    numbered_groups: "{{ 'goodbye' | regex_search('(good)(bye)', '\\2', '\\1') }}"
 
-    - set_fact:
-        combined: "{{ foo | combine({'key2': key2}) }}"
+- name: regex_search unknown argument (failure expected)
+  set_fact:
+    unknown_arg: "{{ 'hello' | regex_search('hello', 'unknown') }}"
+  ignore_errors: yes
+  register: failure
 
-    - assert:
-        that:
-          - "combined.key2 == 'is_defined'"
+- name: regex_search check
+  assert:
+    that:
+      - match_case == ''
+      - ignore_case == 'hello'
+      - single_line == ''
+      - multi_line == 'world'
+      - named_groups == ['bye', 'good']
+      - numbered_groups == ['bye', 'good']
+      - failure is failed

@@ -31,7 +31,7 @@ Designing module interfaces
 General guidelines & tips
 =========================
 
-* Each module should be self-contained in one file, so it can be be auto-transferred by Ansible.
+* Each module should be self-contained in one file, so it can be auto-transferred by Ansible.
 * Module name MUST use underscores instead of hyphens or spaces as a word separator. Using hyphens and spaces will prevent Ansible from importing your module.
 * Always use the ``hacking/test-module.py`` script when developing modules - it will warn you about common pitfalls.
 * If you have a local module that returns facts specific to your installations, a good name for this module is ``site_facts``.
@@ -150,6 +150,7 @@ Ansible conventions offer a predictable user interface across all modules, playb
 
 * Use consistent names across modules (yes, we have many legacy deviations - don't make the problem worse!).
 * Use consistent parameters (arguments) within your module(s).
+* Do not use 'message' or 'syslog_facility' as a parameter name, as this is used internally by Ansible.
 * Normalize parameters with other modules - if Ansible and the API your module connects to use different names for the same parameter, add aliases to your parameters so the user can choose which names to use in tasks and playbooks.
 * Return facts from ``*_facts`` modules in the ``ansible_facts`` field of the :ref:`result dictionary<common_return_values>` so other modules can access them.
 * Implement ``check_mode`` in all ``*_info`` and ``*_facts`` modules. Playbooks which conditionalize based on fact information will only conditionalize correctly in ``check_mode`` if the facts are returned in ``check_mode``. Usually you can add ``supports_check_mode=True`` when instantiating ``AnsibleModule``.

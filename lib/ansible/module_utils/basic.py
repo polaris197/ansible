@@ -237,29 +237,14 @@ FILE_COMMON_ARGUMENTS = dict(
     # created files (these are used by set_fs_attributes_if_different and included in
     # load_file_common_arguments)
     mode=dict(type='raw'),
-    owner=dict(),
-    group=dict(),
-    seuser=dict(),
-    serole=dict(),
-    selevel=dict(),
-    setype=dict(),
-    attributes=dict(aliases=['attr']),
-
-    # The following are not about perms and should not be in a rewritten file_common_args
-    src=dict(),  # Maybe dest or path would be appropriate but src is not
-    follow=dict(type='bool', default=False),  # Maybe follow is appropriate because it determines whether to follow symlinks for permission purposes too
-    force=dict(type='bool'),
-
-    # not taken by the file module, but other action plugins call the file module so this ignores
-    # them for now. In the future, the caller should take care of removing these from the module
-    # arguments before calling the file module.
-    content=dict(no_log=True),  # used by copy
-    backup=dict(),  # Used by a few modules to create a remote backup before updating the file
-    remote_src=dict(),  # used by assemble
-    regexp=dict(),  # used by assemble
-    delimiter=dict(),  # used by assemble
-    directory_mode=dict(),  # used by copy
-    unsafe_writes=dict(type='bool'),  # should be available to any module using atomic_move
+    owner=dict(type='str'),
+    group=dict(type='str'),
+    seuser=dict(type='str'),
+    serole=dict(type='str'),
+    selevel=dict(type='str'),
+    setype=dict(type='str'),
+    attributes=dict(type='str', aliases=['attr']),
+    unsafe_writes=dict(type='bool', default=False),  # should be available to any module using atomic_move
 )
 
 PASSWD_ARG_RE = re.compile(r'^[-]{0,2}pass[-]?(word|wd)?')
@@ -739,14 +724,17 @@ class AnsibleModule(object):
         deprecate(msg, version)
         self.log('[DEPRECATION WARNING] %s %s' % (msg, version))
 
-    def load_file_common_arguments(self, params):
+    def load_file_common_arguments(self, params, path=None):
         '''
         many modules deal with files, this encapsulates common
         options that the file module accepts such that it is directly
         available to all modules and they can share code.
+
+        Allows to overwrite the path/dest module argument by providing path.
         '''
 
-        path = params.get('path', params.get('dest', None))
+        if path is None:
+            path = params.get('path', params.get('dest', None))
         if path is None:
             return {}
         else:
@@ -1428,8 +1416,8 @@ class AnsibleModule(object):
             self.fail_json(msg="Failure when processing no_log parameters. Module invocation will be hidden. "
                                "%s" % to_native(te), invocation={'module_args': 'HIDDEN DUE TO FAILURE'})
 
-        for msg, version in list_deprecations(spec, param):
-            deprecate(msg, version)
+        for message in list_deprecations(spec, param):
+            deprecate(message['msg'], message['version'])
 
     def _check_arguments(self, spec=None, param=None, legal_inputs=None):
         self._syslog_facility = 'LOG_USER'

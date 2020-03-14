@@ -73,17 +73,17 @@ elif [ "${platform}" = "rhel" ]; then
 elif [ "${platform}" = "osx" ]; then
     while true; do
         pip install --disable-pip-version-check --quiet \
-            virtualenv \
+            'virtualenv<20' \
         && break
         echo "Failed to install packages. Sleeping before trying again..."
         sleep 10
     done
 elif [ "${platform}" = "aix" ]; then
     chfs -a size=1G /
-    chfs -a size=5G /usr
+    chfs -a size=4G /usr
     chfs -a size=1G /var
     chfs -a size=1G /tmp
-    chfs -a size=5G /opt
+    chfs -a size=2G /opt
     while true; do
         yum install -q -y \
             gcc \

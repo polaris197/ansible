@@ -43,6 +43,7 @@ options:
   health_check_path:
     description:
       - The ping path that is the destination on the targets for health checks. The path must be defined in order to set a health check.
+      - Requires the I(health_check_protocol) parameter to be set.
     required: false
     type: str
   health_check_interval:
@@ -131,8 +132,8 @@ options:
         If the target type is ip, specify IP addresses from the subnets of the virtual private cloud (VPC) for the target
         group, the RFC 1918 range (10.0.0.0/8, 172.16.0.0/12, and 192.168.0.0/16), and the RFC 6598 range (100.64.0.0/10).
         You can't specify publicly routable IP addresses.
+      - The default behavior is C(instance).
     required: false
-    default: instance
     choices: ['instance', 'ip', 'lambda']
     version_added: 2.5
     type: str
@@ -188,8 +189,14 @@ EXAMPLES = '''
     protocol: http
     port: 80
     vpc_id: vpc-01234567
-    health_check_path: /
-    successful_response_codes: "200,250-260"
+    health_check_protocol: http
+    health_check_path: /health_check
+    health_check_port: 80
+    successful_response_codes: 200
+    health_check_interval: 15
+    health_check_timeout: 3
+    healthy_threshold_count: 4
+    unhealthy_threshold_count: 3
     state: present
 
 # Delete a target group
@@ -203,6 +210,7 @@ EXAMPLES = '''
     protocol: http
     port: 81
     vpc_id: vpc-01234567
+    health_check_protocol: http
     health_check_path: /
     successful_response_codes: "200,250-260"
     targets:
@@ -220,6 +228,7 @@ EXAMPLES = '''
     protocol: http
     port: 81
     vpc_id: vpc-01234567
+    health_check_protocol: http
     health_check_path: /
     successful_response_codes: "200,250-260"
     target_type: ip
@@ -440,8 +449,10 @@ def create_or_update_target_group(connection, module):
     changed = False
     new_target_group = False
     params = dict()
+    target_type = module.params.get("target_type")
     params['Name'] = module.params.get("name")
-    if module.params.get("target_type") != "lambda":
+    params['TargetType'] = target_type
+    if target_type != "lambda":
         params['Protocol'] = module.params.get("protocol").upper()
         params['Port'] = module.params.get("port")
         params['VpcId'] = module.params.get("vpc_id")
@@ -491,10 +502,8 @@ def create_or_update_target_group(connection, module):
                 params['Matcher']['HttpCode'] = module.params.get("successful_response_codes")
 
     # Get target type
-    if module.params.get("target_type") is not None:
-        params['TargetType'] = module.params.get("target_type")
-        if params['TargetType'] == 'ip':
-            fail_if_ip_target_type_not_supported(module)
+    if target_type == 'ip':
+        fail_if_ip_target_type_not_supported(module)
 
     # Get target group
     tg = get_target_group(connection, module)
@@ -569,7 +578,7 @@ def create_or_update_target_group(connection, module):
 
             if module.params.get("targets"):
 
-                if module.params.get("target_type") != "lambda":
+                if target_type != "lambda":
                     params['Targets'] = module.params.get("targets")
 
                     # Correct type of target ports
@@ -651,7 +660,7 @@ def create_or_update_target_group(connection, module):
                         module.fail_json_aws(
                             e, msg="Couldn't register targets")
             else:
-                if module.params.get("target_type") != "lambda":
+                if target_type != "lambda":
 
                     current_instances = current_targets['TargetHealthDescriptions']
 
@@ -692,7 +701,7 @@ def create_or_update_target_group(connection, module):
         tg = get_target_group(connection, module)
 
         if module.params.get("targets"):
-            if module.params.get("target_type") != "lambda":
+            if target_type != "lambda":
                 params['Targets'] = module.params.get("targets")
                 try:
                     connection.register_targets(TargetGroupArn=tg['TargetGroupArn'], Targets=params['Targets'])
@@ -821,7 +830,7 @@ def main():
         state=dict(required=True, choices=['present', 'absent']),
         successful_response_codes=dict(),
         tags=dict(default={}, type='dict'),
-        target_type=dict(default='instance', choices=['instance', 'ip', 'lambda']),
+        target_type=dict(choices=['instance', 'ip', 'lambda']),
         targets=dict(type='list'),
         unhealthy_threshold_count=dict(type='int'),
         vpc_id=dict(),
@@ -829,10 +838,15 @@ def main():
         wait=dict(type='bool', default=False)
     )
 
-    module = AnsibleAWSModule(argument_spec=argument_spec, required_if=[
-        ['target_type', 'instance', ['protocol', 'port', 'vpc_id']],
-        ['target_type', 'ip', ['protocol', 'port', 'vpc_id']],
-    ])
+    module = AnsibleAWSModule(argument_spec=argument_spec,
+                              required_if=[
+                                  ['target_type', 'instance', ['protocol', 'port', 'vpc_id']],
+                                  ['target_type', 'ip', ['protocol', 'port', 'vpc_id']],
+                              ]
+                              )
+
+    if module.params.get('target_type') is None:
+        module.params['target_type'] = 'instance'
 
     connection = module.client('elbv2')
 

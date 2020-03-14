@@ -81,6 +81,7 @@ Codes
   imports-improper-location                                    Imports              Error                  Imports should be directly below ``DOCUMENTATION``/``EXAMPLES``/``RETURN``/``ANSIBLE_METADATA``
   incompatible-choices                                         Documentation        Error                  Choices value from the argument_spec is not compatible with type defined in the argument_spec
   incompatible-default-type                                    Documentation        Error                  Default value from the argument_spec is not compatible with type defined in the argument_spec
+  invalid-argument-name                                        Documentation        Error                  Argument in argument_spec must not be one of 'message', 'syslog_facility' as it is used internally by Ansible Core Engine
   invalid-argument-spec                                        Documentation        Error                  Argument in argument_spec must be a dictionary/hash when used
   invalid-argument-spec-options                                Documentation        Error                  Suboptions in argument_spec are invalid
   invalid-documentation                                        Documentation        Error                  ``DOCUMENTATION`` is not valid YAML
@@ -140,4 +141,22 @@ Codes
   use-run-command-not-os-call                                  Imports              Error                  ``os.call`` used instead of ``module.run_command``
   use-run-command-not-popen                                    Imports              Error                  ``subprocess.Popen`` used instead of ``module.run_command``
   use-short-gplv3-license                                      Documentation        Error                  GPLv3 license header should be the :ref:`short form <copyright>` for new modules
+  mutually_exclusive-type                                      Documentation        Error                  mutually_exclusive entry contains non-string value
+  mutually_exclusive-collision                                 Documentation        Error                  mutually_exclusive entry has repeated terms
+  mutually_exclusive-unknown                                   Documentation        Error                  mutually_exclusive entry contains option which does not appear in argument_spec (potentially an alias of an option?)
+  required_one_of-type                                         Documentation        Error                  required_one_of entry contains non-string value
+  required_one_of-collision                                    Documentation        Error                  required_one_of entry has repeated terms
+  required_one_of-unknown                                      Documentation        Error                  required_one_of entry contains option which does not appear in argument_spec (potentially an alias of an option?)
+  required_together-type                                       Documentation        Error                  required_together entry contains non-string value
+  required_together-collision                                  Documentation        Error                  required_together entry has repeated terms
+  required_together-unknown                                    Documentation        Error                  required_together entry contains option which does not appear in argument_spec (potentially an alias of an option?)
+  required_if-is_one_of-type                                   Documentation        Error                  required_if entry has a fourth value which is not a bool
+  required_if-requirements-type                                Documentation        Error                  required_if entry has a third value (requirements) which is not a list or tuple
+  required_if-requirements-collision                           Documentation        Error                  required_if entry has repeated terms in requirements
+  required_if-requirements-unknown                             Documentation        Error                  required_if entry's requirements contains option which does not appear in argument_spec (potentially an alias of an option?)
+  required_if-unknown-key                                      Documentation        Error                  required_if entry's key does not appear in argument_spec (potentially an alias of an option?)
+  required_if-key-in-requirements                              Documentation        Error                  required_if entry contains its key in requirements list/tuple
+  required_if-value-type                                       Documentation        Error                  required_if entry's value is not of the type specified for its key
+  required_by-collision                                        Documentation        Error                  required_by entry has repeated terms
+  required_by-unknown                                          Documentation        Error                  required_by entry contains option which does not appear in argument_spec (potentially an alias of an option?)
 ============================================================   ==================   ====================   =========================================================================================

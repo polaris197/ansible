@@ -133,7 +133,7 @@ options:
   ssl_mode:
     description:
       - Determines whether or with what priority a secure SSL TCP/IP connection will be negotiated with the server.
-      - See https://www.postgresql.org/docs/current/static/libpq-ssl.html for more information on the modes.
+      - See U(https://www.postgresql.org/docs/current/static/libpq-ssl.html) for more information on the modes.
       - Default of C(prefer) matches libpq default.
     type: str
     default: prefer
@@ -818,7 +818,7 @@ def main():
         expires=dict(type='str', default=None),
         conn_limit=dict(type='int', default=None),
         session_role=dict(type='str'),
-        groups=dict(type='list'),
+        groups=dict(type='list', elements='str'),
         comment=dict(type='str', default=None),
     )
     module = AnsibleModule(

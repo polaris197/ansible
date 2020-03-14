@@ -225,6 +225,8 @@ class SanityConfig(TestConfig):
         else:
             self.base_branch = ''
 
+        self.info_stderr = self.lint
+
 
 class IntegrationConfig(TestConfig):
     """Configuration for the integration command."""
@@ -254,12 +256,14 @@ class IntegrationConfig(TestConfig):
         self.diff = args.diff
         self.no_temp_workdir = args.no_temp_workdir
         self.no_temp_unicode = args.no_temp_unicode
+        self.enable_test_support = args.enable_test_support
 
         if self.get_delegated_completion().get('temp-unicode', 'enabled') == 'disabled':
             self.no_temp_unicode = True
 
         if self.list_targets:
             self.explain = True
+            self.info_stderr = True
 
     def get_ansible_config(self):  # type: () -> str
         """Return the path to the Ansible config for the given config."""
@@ -309,6 +313,8 @@ class NetworkIntegrationConfig(IntegrationConfig):
         super(NetworkIntegrationConfig, self).__init__(args, 'network-integration')
 
         self.platform = args.platform  # type: t.List[str]
+        self.platform_collection = dict(args.platform_collection or [])  # type: t.Dict[str, str]
+        self.platform_connection = dict(args.platform_connection or [])  # type: t.Dict[str, str]
         self.inventory = args.inventory  # type: str
         self.testcase = args.testcase  # type: str
 

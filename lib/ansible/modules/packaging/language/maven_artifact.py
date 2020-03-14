@@ -563,7 +563,9 @@ def main():
             dest=dict(type="path", required=True),
             validate_certs=dict(required=False, default=True, type='bool'),
             keep_name=dict(required=False, default=False, type='bool'),
-            verify_checksum=dict(required=False, default='download', choices=['never', 'download', 'change', 'always'])
+            verify_checksum=dict(required=False, default='download', choices=['never', 'download', 'change', 'always']),
+            directory_mode=dict(type='str'),  # Used since https://github.com/ansible/ansible/pull/24965, not sure
+                                              # if this should really be here.
         ),
         add_file_common_args=True,
         mutually_exclusive=([('version', 'version_by_spec')])
@@ -660,8 +662,7 @@ def main():
         except ValueError as e:
             module.fail_json(msg=e.args[0])
 
-    module.params['dest'] = dest
-    file_args = module.load_file_common_arguments(module.params)
+    file_args = module.load_file_common_arguments(module.params, path=dest)
     changed = module.set_fs_attributes_if_different(file_args, changed)
     if changed:
         module.exit_json(state=state, dest=dest, group_id=group_id, artifact_id=artifact_id, version=version, classifier=classifier,
