@@ -125,6 +125,11 @@ from .coverage.analyze.targets.expand import (
     CoverageAnalyzeTargetsExpandConfig,
 )
 
+from .coverage.analyze.targets.filter import (
+    command_coverage_analyze_targets_filter,
+    CoverageAnalyzeTargetsFilterConfig,
+)
+
 from .coverage.analyze.targets.combine import (
     command_coverage_analyze_targets_combine,
     CoverageAnalyzeTargetsCombineConfig,
@@ -178,15 +183,15 @@ def main():
         display.review_warnings()
     except ApplicationWarning as ex:
         display.warning(u'%s' % ex)
-        exit(0)
+        sys.exit(0)
     except ApplicationError as ex:
         display.error(u'%s' % ex)
-        exit(1)
+        sys.exit(1)
     except KeyboardInterrupt:
-        exit(2)
+        sys.exit(2)
     except IOError as ex:
         if ex.errno == errno.EPIPE:
-            exit(3)
+            sys.exit(3)
         raise
 
 
@@ -197,7 +202,10 @@ def parse_args():
     except ImportError:
         if '--requirements' not in sys.argv:
             raise
-        raw_command(generate_pip_install(generate_pip_command(sys.executable), 'ansible-test'))
+        # install argparse without using constraints since pip may be too old to support them
+        # not using the ansible-test requirements file since this install is for sys.executable rather than the delegated python (which may be different)
+        # argparse has no special requirements, so upgrading pip is not required here
+        raw_command(generate_pip_install(generate_pip_command(sys.executable), 'argparse', packages=['argparse'], use_constraints=False))
         import argparse
 
     try:
@@ -301,6 +309,9 @@ def parse_args():
     test.add_argument('--metadata',
                       help=argparse.SUPPRESS)
 
+    test.add_argument('--base-branch',
+                      help='base branch used for change detection')
+
     add_changes(test, argparse)
     add_environments(test)
 
@@ -388,10 +399,6 @@ def parse_args():
     integration.add_argument('--no-temp-unicode',
                              action='store_true',
                              help='avoid unicode characters in temporary directory (use only for verifying broken tests)')
-
-    integration.add_argument('--enable-test-support',
-                             action='store_true',
-                             help=argparse.SUPPRESS)  # temporary option for side-by-side testing -- remove after collection migration
 
     subparsers = parser.add_subparsers(metavar='COMMAND')
     subparsers.required = True  # work-around for python 3 bug which makes subparsers optional
@@ -523,8 +530,9 @@ def parse_args():
                         choices=SUPPORTED_PYTHON_VERSIONS + ('default',),
                         help='python version: %s' % ', '.join(SUPPORTED_PYTHON_VERSIONS))
 
-    sanity.add_argument('--base-branch',
-                        help=argparse.SUPPRESS)
+    sanity.add_argument('--enable-optional-errors',
+                        action='store_true',
+                        help='enable optional errors')
 
     add_lint(sanity)
     add_extra_docker_options(sanity, integration=False)
@@ -632,6 +640,10 @@ def parse_args():
                      action='store_true',
                      help='dump environment to disk')
 
+    env.add_argument('--list-files',
+                     action='store_true',
+                     help='list files on stdout')
+
     # noinspection PyTypeChecker
     env.add_argument('--timeout',
                      type=int,
@@ -663,7 +675,7 @@ def key_value(argparse, value):  # type: (argparse_module, str) -> t.Tuple[str, 
     if len(parts) != 2:
         raise argparse.ArgumentTypeError('"%s" must be in the format "key=value"' % value)
 
-    return tuple(parts)
+    return parts[0], parts[1]
 
 
 # noinspection PyProtectedMember
@@ -726,6 +738,51 @@ def add_coverage_analyze(coverage_subparsers, coverage_common):  # type: (argpar
     targets_expand.add_argument(
         'output_file',
         help='output file to write expanded coverage to',
+    )
+
+    targets_filter = targets_subparsers.add_parser(
+        'filter',
+        parents=[coverage_common],
+        help='filter aggregated coverage data',
+    )
+
+    targets_filter.set_defaults(
+        func=command_coverage_analyze_targets_filter,
+        config=CoverageAnalyzeTargetsFilterConfig,
+    )
+
+    targets_filter.add_argument(
+        'input_file',
+        help='input file to read aggregated coverage from',
+    )
+
+    targets_filter.add_argument(
+        'output_file',
+        help='output file to write expanded coverage to',
+    )
+
+    targets_filter.add_argument(
+        '--include-target',
+        dest='include_targets',
+        action='append',
+        help='include the specified targets',
+    )
+
+    targets_filter.add_argument(
+        '--exclude-target',
+        dest='exclude_targets',
+        action='append',
+        help='exclude the specified targets',
+    )
+
+    targets_filter.add_argument(
+        '--include-path',
+        help='include paths matching the given regex',
+    )
+
+    targets_filter.add_argument(
+        '--exclude-path',
+        help='exclude paths matching the given regex',
     )
 
     targets_combine = targets_subparsers.add_parser(
@@ -897,7 +954,7 @@ def add_environments(parser, isolated_delegation=True):
     remote.add_argument('--remote-provider',
                         metavar='PROVIDER',
                         help='remote provider to use: %(choices)s',
-                        choices=['default', 'aws', 'azure', 'parallels'],
+                        choices=['default', 'aws', 'azure', 'parallels', 'ibmvpc', 'ibmps'],
                         default='default')
 
     remote.add_argument('--remote-aws-region',
@@ -981,6 +1038,12 @@ def add_extra_docker_options(parser, integration=True):
                         choices=('default', 'unconfined'),
                         default=None,
                         help='set seccomp confinement for the test container: %(choices)s')
+
+    docker.add_argument('--docker-terminate',
+                        metavar='WHEN',
+                        help='terminate docker container: %(choices)s (default: %(default)s)',
+                        choices=['never', 'always', 'success'],
+                        default='always')
 
     if not integration:
         return

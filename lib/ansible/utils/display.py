@@ -18,6 +18,7 @@
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
+import datetime
 import errno
 import fcntl
 import getpass
@@ -25,6 +26,7 @@ import locale
 import logging
 import os
 import random
+import re
 import subprocess
 import sys
 import textwrap
@@ -35,8 +37,8 @@ from termios import TIOCGWINSZ
 
 from ansible import constants as C
 from ansible.errors import AnsibleError, AnsibleAssertionError
-from ansible.module_utils._text import to_bytes, to_text
-from ansible.module_utils.six import with_metaclass
+from ansible.module_utils._text import to_bytes, to_text, to_native
+from ansible.module_utils.six import with_metaclass, string_types
 from ansible.utils.color import stringc
 from ansible.utils.singleton import Singleton
 from ansible.utils.unsafe_proxy import wrap_var
@@ -47,6 +49,9 @@ try:
 except NameError:
     # Python 3, we already have raw_input
     pass
+
+
+TAGGED_VERSION_RE = re.compile('^([^.]+.[^.]+):(.*)$')
 
 
 class FilterBlackList(logging.Filter):
@@ -62,7 +67,12 @@ class FilterUserInjector(logging.Filter):
     This is a filter which injects the current user as the 'user' attribute on each record. We need to add this filter
     to all logger handlers so that 3rd party libraries won't print an exception due to user not being defined.
     """
-    username = getpass.getuser()
+
+    try:
+        username = getpass.getuser()
+    except KeyError:
+        # people like to make containers w/o actual valid passwd/shadow and use host uids
+        username = 'uid=%s' % os.getuid()
 
     def filter(self, record):
         record.user = FilterUserInjector.username
@@ -153,13 +163,18 @@ class Display(with_metaclass(Singleton, object)):
         nocolor = msg
 
         if not log_only:
-            if not msg.endswith(u'\n') and newline:
-                msg2 = msg + u'\n'
+
+            has_newline = msg.endswith(u'\n')
+            if has_newline:
+                msg2 = msg[:-1]
             else:
                 msg2 = msg
 
             if color:
                 msg2 = stringc(msg2, color)
+
+            if has_newline or newline:
+                msg2 = msg2 + u'\n'
 
             msg2 = to_bytes(msg2, encoding=self._output_encoding(stderr=stderr))
             if sys.version_info >= (3,):
@@ -239,15 +254,42 @@ class Display(with_metaclass(Singleton, object)):
             else:
                 self.display("<%s> %s" % (host, msg), color=C.COLOR_VERBOSE, stderr=to_stderr)
 
-    def deprecated(self, msg, version=None, removed=False):
+    def deprecated(self, msg, version=None, removed=False, date=None):
         ''' used to print out a deprecation message.'''
 
         if not removed and not C.DEPRECATION_WARNINGS:
             return
 
         if not removed:
-            if version:
-                new_msg = "[DEPRECATION WARNING]: %s. This feature will be removed in version %s." % (msg, version)
+            if date:
+                m = None
+                if isinstance(date, string_types):
+                    version = to_native(date)
+                    m = TAGGED_VERSION_RE.match(date)
+                if m:
+                    collection = m.group(1)
+                    date = m.group(2)
+                    if collection == 'ansible.builtin':
+                        collection = 'Ansible-base'
+                    new_msg = "[DEPRECATION WARNING]: %s. This feature will be removed in a release of %s after %s." % (
+                        msg, collection, date)
+                else:
+                    new_msg = "[DEPRECATION WARNING]: %s. This feature will be removed in a release after %s." % (
+                        msg, date)
+            elif version:
+                m = None
+                if isinstance(version, string_types):
+                    version = to_native(version)
+                    m = TAGGED_VERSION_RE.match(version)
+                if m:
+                    collection = m.group(1)
+                    version = m.group(2)
+                    if collection == 'ansible.builtin':
+                        collection = 'Ansible-base'
+                    new_msg = "[DEPRECATION WARNING]: %s. This feature will be removed in version %s of %s." % (msg, version,
+                                                                                                                collection)
+                else:
+                    new_msg = "[DEPRECATION WARNING]: %s. This feature will be removed in version %s." % (msg, version)
             else:
                 new_msg = "[DEPRECATION WARNING]: %s. This feature will be removed in a future release." % (msg)
             new_msg = new_msg + " Deprecation warnings can be disabled by setting deprecation_warnings=False in ansible.cfg.\n\n"

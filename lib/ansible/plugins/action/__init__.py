@@ -28,6 +28,7 @@ from ansible.module_utils.six.moves import shlex_quote
 from ansible.module_utils._text import to_bytes, to_native, to_text
 from ansible.parsing.utils.jsonify import jsonify
 from ansible.release import __version__
+from ansible.utils.collection_loader import resource_from_fqcr
 from ansible.utils.display import Display
 from ansible.utils.unsafe_proxy import wrap_var, AnsibleUnsafeText
 from ansible.vars.clean import remove_internal_keys
@@ -157,22 +158,35 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         Handles the loading and templating of the module code through the
         modify_module() function.
         '''
+
         if task_vars is None:
-            task_vars = dict()
+            use_vars = dict()
+
+        if self._task.delegate_to:
+            use_vars = task_vars.get('ansible_delegated_vars')[self._task.delegate_to]
+        else:
+            use_vars = task_vars
 
         # Search module path(s) for named module.
         for mod_type in self._connection.module_implementation_preferences:
             # Check to determine if PowerShell modules are supported, and apply
             # some fixes (hacks) to module name + args.
             if mod_type == '.ps1':
-                # win_stat, win_file, and win_copy are not just like their
+                # FIXME: This should be temporary and moved to an exec subsystem plugin where we can define the mapping
+                # for each subsystem.
+                win_collection = 'ansible.windows'
+
+                # async_status, win_stat, win_file, win_copy, and win_ping are not just like their
                 # python counterparts but they are compatible enough for our
                 # internal usage
-                if module_name in ('stat', 'file', 'copy') and self._task.action != module_name:
-                    module_name = 'win_%s' % module_name
+                if module_name in ('stat', 'file', 'copy', 'ping') and self._task.action != module_name:
+                    module_name = '%s.win_%s' % (win_collection, module_name)
+                elif module_name in ['async_status']:
+                    module_name = '%s.%s' % (win_collection, module_name)
 
                 # Remove extra quotes surrounding path parameters before sending to module.
-                if module_name in ('win_stat', 'win_file', 'win_copy', 'slurp') and module_args and hasattr(self._connection._shell, '_unquote'):
+                if resource_from_fqcr(module_name) in ['win_stat', 'win_file', 'win_copy', 'slurp'] and module_args and \
+                        hasattr(self._connection._shell, '_unquote'):
                     for key in ('src', 'dest', 'path'):
                         if key in module_args:
                             module_args[key] = self._connection._shell._unquote(module_args[key])
@@ -202,7 +216,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         for dummy in (1, 2):
             try:
                 (module_data, module_style, module_shebang) = modify_module(module_name, module_path, module_args, self._templar,
-                                                                            task_vars=task_vars,
+                                                                            task_vars=use_vars,
                                                                             module_compression=self._play_context.module_compression,
                                                                             async_timeout=self._task.async_val,
                                                                             environment=final_environment,
@@ -213,17 +227,22 @@ class ActionBase(with_metaclass(ABCMeta, object)):
                     action=self,
                     interpreter_name=idre.interpreter_name,
                     discovery_mode=idre.discovery_mode,
-                    task_vars=task_vars))
+                    task_vars=use_vars))
 
                 # update the local task_vars with the discovered interpreter (which might be None);
                 # we'll propagate back to the controller in the task result
                 discovered_key = 'discovered_interpreter_%s' % idre.interpreter_name
-                # store in local task_vars facts collection for the retry and any other usages in this worker
-                if task_vars.get('ansible_facts') is None:
-                    task_vars['ansible_facts'] = {}
-                task_vars['ansible_facts'][discovered_key] = self._discovered_interpreter
-                # preserve this so _execute_module can propagate back to controller as a fact
-                self._discovered_interpreter_key = discovered_key
+
+                # TODO: this condition prevents 'wrong host' from being updated
+                # but in future we would want to be able to update 'delegated host facts'
+                # irrespective of task settings
+                if not self._task.delegate_to or self._task.delegate_facts:
+                    # store in local task_vars facts collection for the retry and any other usages in this worker
+                    if use_vars.get('ansible_facts') is None:
+                        task_vars['ansible_facts'] = {}
+                    task_vars['ansible_facts'][discovered_key] = self._discovered_interpreter
+                    # preserve this so _execute_module can propagate back to controller as a fact
+                    self._discovered_interpreter_key = discovered_key
 
         return (module_style, module_shebang, module_data, module_path)
 
@@ -332,18 +351,18 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         Create and return a temporary path on a remote box.
         '''
 
-        become_unprivileged = self._is_become_unprivileged()
-        remote_tmp = self.get_shell_option('remote_tmp', default='~/.ansible/tmp')
-
-        # deal with tmpdir creation
-        basefile = 'ansible-tmp-%s-%s' % (time.time(), random.randint(0, 2**48))
         # Network connection plugins (network_cli, netconf, etc.) execute on the controller, rather than the remote host.
         # As such, we want to avoid using remote_user for paths  as remote_user may not line up with the local user
         # This is a hack and should be solved by more intelligent handling of remote_tmp in 2.7
         if getattr(self._connection, '_remote_is_local', False):
             tmpdir = C.DEFAULT_LOCAL_TMP
         else:
-            tmpdir = self._remote_expand_user(remote_tmp, sudoable=False)
+            # NOTE: shell plugins should populate this setting anyways, but they dont do remote expansion, which
+            # we need for 'non posix' systems like cloud-init and solaris
+            tmpdir = self._remote_expand_user(self.get_shell_option('remote_tmp', default='~/.ansible/tmp'), sudoable=False)
+
+        become_unprivileged = self._is_become_unprivileged()
+        basefile = self._connection._shell._generate_temp_dir_name()
         cmd = self._connection._shell.mkdtemp(basefile=basefile, system=become_unprivileged, tmpdir=tmpdir)
         result = self._low_level_execute_command(cmd, sudoable=False)
 
@@ -362,9 +381,9 @@ class ActionBase(with_metaclass(ABCMeta, object)):
             elif u'No space left on device' in result['stderr']:
                 output = result['stderr']
             else:
-                output = ('Authentication or permission failure. '
+                output = ('Failed to create temporary directory.'
                           'In some cases, you may have been able to authenticate and did not have permissions on the target directory. '
-                          'Consider changing the remote tmp path in ansible.cfg to a path rooted in "/tmp". '
+                          'Consider changing the remote tmp path in ansible.cfg to a path rooted in "/tmp", for more error information use -vvv. '
                           'Failed command was: %s, exited with result %d' % (cmd, result['rc']))
             if 'stdout' in result and result['stdout'] != u'':
                 output = output + u", stdout output: %s" % result['stdout']
@@ -519,12 +538,12 @@ class ActionBase(with_metaclass(ABCMeta, object)):
                     raise AnsibleError('Failed to change ownership of the temporary files Ansible needs to create despite connecting as a privileged user. '
                                        'Unprivileged become user would be unable to read the file.')
                 elif res['rc'] != 0:
-                    if C.ALLOW_WORLD_READABLE_TMPFILES:
+                    if self.get_shell_option('world_readable_temp', C.ALLOW_WORLD_READABLE_TMPFILES):
                         # chown and fs acls failed -- do things this insecure
                         # way only if the user opted in in the config file
                         display.warning('Using world-readable permissions for temporary files Ansible needs to create when becoming an unprivileged user. '
                                         'This may be insecure. For information on securing this, see '
-                                        'https://docs.ansible.com/ansible/become.html#becoming-an-unprivileged-user')
+                                        'https://docs.ansible.com/ansible/user_guide/become.html#risks-of-becoming-an-unprivileged-user')
                         res = self._remote_chmod(remote_paths, 'a+%s' % chmod_mode)
                         if res['rc'] != 0:
                             raise AnsibleError('Failed to set file mode on remote files (rc: {0}, err: {1})'.format(res['rc'], to_native(res['stderr'])))
@@ -707,7 +726,8 @@ class ActionBase(with_metaclass(ABCMeta, object)):
             module_args['_ansible_check_mode'] = False
 
         # set no log in the module arguments, if required
-        module_args['_ansible_no_log'] = self._play_context.no_log or C.DEFAULT_NO_TARGET_SYSLOG
+        no_target_syslog = C.config.get_config_value('DEFAULT_NO_TARGET_SYSLOG', variables=task_vars)
+        module_args['_ansible_no_log'] = self._play_context.no_log or no_target_syslog
 
         # set debug in the module arguments, if required
         module_args['_ansible_debug'] = C.DEFAULT_DEBUG
@@ -802,7 +822,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
                 msg = "Setting the async dir from the environment keyword " \
                       "ANSIBLE_ASYNC_DIR is deprecated. Set the async_dir " \
                       "shell option instead"
-                self._display.deprecated(msg, "2.12")
+                self._display.deprecated(msg, "ansible.builtin:2.12")
             else:
                 # ANSIBLE_ASYNC_DIR is not set on the task, we get the value
                 # from the shell option and temporarily add to the environment
@@ -1045,10 +1065,14 @@ class ActionBase(with_metaclass(ABCMeta, object)):
             display.debug("_low_level_execute_command(): changing cwd to %s for this command" % chdir)
             cmd = self._connection._shell.append_command('cd %s' % chdir, cmd)
 
+        # https://github.com/ansible/ansible/issues/68054
+        if executable:
+            self._connection._shell.executable = executable
+
         ruser = self._get_remote_user()
         buser = self.get_become_option('become_user')
         if (sudoable and self._connection.become and  # if sudoable and have become
-                self._connection.transport.split('.')[-1] != 'network_cli' and  # if not using network_cli
+                resource_from_fqcr(self._connection.transport) != 'network_cli' and  # if not using network_cli
                 (C.BECOME_ALLOW_SAME_USER or (buser != ruser or not any((ruser, buser))))):  # if we allow same user PE or users are different and either is set
             display.debug("_low_level_execute_command(): using become for this command")
             cmd = self._connection.become.build_become_command(cmd, self._connection._shell)

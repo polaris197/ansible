@@ -21,6 +21,7 @@ __metaclass__ = type
 
 import os
 import tempfile
+import time
 
 from ansible import constants as C
 from ansible import context
@@ -161,8 +162,11 @@ class TaskQueueManager:
         for callback_plugin_name in (c for c in C.DEFAULT_CALLBACK_WHITELIST if AnsibleCollectionRef.is_valid_fqcr(c)):
             # TODO: need to extend/duplicate the stdout callback check here (and possible move this ahead of the old way
             callback_obj = callback_loader.get(callback_plugin_name)
-            callback_obj.set_options()
-            self._callback_plugins.append(callback_obj)
+            if callback_obj:
+                callback_obj.set_options()
+                self._callback_plugins.append(callback_obj)
+            else:
+                display.warning("Skipping '%s', unable to load or use as a callback" % callback_plugin_name)
 
         self._callbacks_loaded = True
 
@@ -256,6 +260,15 @@ class TaskQueueManager:
 
     def _cleanup_processes(self):
         if hasattr(self, '_workers'):
+            for attempts_remaining in range(C.WORKER_SHUTDOWN_POLL_COUNT - 1, -1, -1):
+                if not any(worker_prc and worker_prc.is_alive() for worker_prc in self._workers):
+                    break
+
+                if attempts_remaining:
+                    time.sleep(C.WORKER_SHUTDOWN_POLL_DELAY)
+                else:
+                    display.warning('One or more worker processes are still running and will be terminated.')
+
             for worker_prc in self._workers:
                 if worker_prc and worker_prc.is_alive():
                     try:

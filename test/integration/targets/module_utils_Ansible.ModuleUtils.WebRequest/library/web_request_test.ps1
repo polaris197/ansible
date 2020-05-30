@@ -423,9 +423,8 @@ $tests = [Ordered]@{
             }
             mutually_exclusive = @(,@('url', 'test'))
         }
-        $spec = Merge-WebRequestSpec -ModuleSpec $spec
 
-        $testModule = [Ansible.Basic.AnsibleModule]::Create(@(), $spec)
+        $testModule = [Ansible.Basic.AnsibleModule]::Create(@(), $spec, @(Get-AnsibleWebRequestSpec))
         $r = Get-AnsibleWebRequest -Url $testModule.Params.url -Module $testModule
 
         $actual = Invoke-WithWebRequest -Module $testModule -Request $r -Script {
@@ -435,6 +434,25 @@ $tests = [Ordered]@{
             Convert-StreamToString -Stream $Stream
         } | ConvertFrom-Json
         $actual.headers.'User-Agent' | Assert-Equals -Expected 'actual-agent'
+    }
+
+    'Web request with default proxy' = {
+        $params = @{
+            Uri = "https://$httpbin_host/get"
+        }
+        $r = Get-AnsibleWebRequest @params
+
+        $null -ne $r.Proxy | Assert-Equals -Expected $true
+    }
+
+    'Web request with no proxy' = {
+        $params = @{
+            Uri = "https://$httpbin_host/get"
+            UseProxy = $false
+        }
+        $r = Get-AnsibleWebRequest @params
+
+        $null -eq $r.Proxy | Assert-Equals -Expected $true
     }
 }
 

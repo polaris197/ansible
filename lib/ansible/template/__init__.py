@@ -28,7 +28,9 @@ import re
 import time
 
 from contextlib import contextmanager
+from distutils.version import LooseVersion
 from numbers import Number
+from traceback import format_exc
 
 try:
     from hashlib import sha1
@@ -45,19 +47,15 @@ from ansible.module_utils.six import iteritems, string_types, text_type
 from ansible.module_utils._text import to_native, to_text, to_bytes
 from ansible.module_utils.common._collections_compat import Sequence, Mapping, MutableMapping
 from ansible.module_utils.common.collections import is_sequence
+from ansible.module_utils.compat.importlib import import_module
 from ansible.plugins.loader import filter_loader, lookup_loader, test_loader
 from ansible.template.safe_eval import safe_eval
 from ansible.template.template import AnsibleJ2Template
 from ansible.template.vars import AnsibleJ2Vars
 from ansible.utils.collection_loader import AnsibleCollectionRef
 from ansible.utils.display import Display
+from ansible.utils.collection_loader._collection_finder import _get_collection_metadata
 from ansible.utils.unsafe_proxy import wrap_var
-
-# HACK: keep Python 2.6 controller tests happy in CI until they're properly split
-try:
-    from importlib import import_module
-except ImportError:
-    import_module = __import__
 
 display = Display()
 
@@ -72,6 +70,8 @@ NON_TEMPLATED_TYPES = (bool, Number)
 
 JINJA2_OVERRIDE = '#jinja2:'
 
+from jinja2 import __version__ as j2_version
+
 USE_JINJA2_NATIVE = False
 if C.DEFAULT_JINJA2_NATIVE:
     try:
@@ -81,7 +81,6 @@ if C.DEFAULT_JINJA2_NATIVE:
     except ImportError:
         from jinja2 import Environment
         from jinja2.utils import concat as j2_concat
-        from jinja2 import __version__ as j2_version
         display.warning(
             'jinja2_native requires Jinja 2.10 and above. '
             'Version detected: %s. Falling back to default.' % j2_version
@@ -300,6 +299,40 @@ class AnsibleContext(Context):
         self._update_unsafe(val)
         return val
 
+    def get_all(self):
+        """Return the complete context as a dict including the exported
+        variables. For optimizations reasons this might not return an
+        actual copy so be careful with using it.
+
+        This is to prevent from running ``AnsibleJ2Vars`` through dict():
+
+            ``dict(self.parent, **self.vars)``
+
+        In Ansible this means that ALL variables would be templated in the
+        process of re-creating the parent because ``AnsibleJ2Vars`` templates
+        each variable in its ``__getitem__`` method. Instead we re-create the
+        parent via ``AnsibleJ2Vars.add_locals`` that creates a new
+        ``AnsibleJ2Vars`` copy without templating each variable.
+
+        This will prevent unnecessarily templating unused variables in cases
+        like setting a local variable and passing it to {% include %}
+        in a template.
+
+        Also see ``AnsibleJ2Template``and
+        https://github.com/pallets/jinja/commit/d67f0fd4cc2a4af08f51f4466150d49da7798729
+        """
+        if LooseVersion(j2_version) >= LooseVersion('2.9'):
+            if not self.vars:
+                return self.parent
+            if not self.parent:
+                return self.vars
+
+        if isinstance(self.parent, AnsibleJ2Vars):
+            return self.parent.add_locals(self.vars)
+        else:
+            # can this happen in Ansible?
+            return dict(self.parent, **self.vars)
+
 
 class JinjaPluginIntercept(MutableMapping):
     def __init__(self, delegatee, pluginloader, *args, **kwargs):
@@ -319,48 +352,75 @@ class JinjaPluginIntercept(MutableMapping):
     # FUTURE: we can cache FQ filter/test calls for the entire duration of a run, since a given collection's impl's
     # aren't supposed to change during a run
     def __getitem__(self, key):
-        if not isinstance(key, string_types):
-            raise ValueError('key must be a string')
+        try:
+            if not isinstance(key, string_types):
+                raise ValueError('key must be a string')
 
-        key = to_native(key)
+            key = to_native(key)
 
-        if '.' not in key:  # might be a built-in value, delegate to base dict
-            return self._delegatee.__getitem__(key)
+            if '.' not in key:  # might be a built-in or legacy, check the delegatee dict first, then try for a last-chance base redirect
+                func = self._delegatee.get(key)
 
-        func = self._collection_jinja_func_cache.get(key)
+                if func:
+                    return func
 
-        if func:
-            return func
+                ts = _get_collection_metadata('ansible.builtin')
 
-        acr = AnsibleCollectionRef.try_parse_fqcr(key, self._dirname)
+                # TODO: implement support for collection-backed redirect (currently only builtin)
+                # TODO: implement cycle detection (unified across collection redir as well)
+                redirect_fqcr = ts.get('plugin_routing', {}).get(self._dirname, {}).get(key, {}).get('redirect', None)
+                if redirect_fqcr:
+                    acr = AnsibleCollectionRef.from_fqcr(ref=redirect_fqcr, ref_type=self._dirname)
+                    display.vvv('redirecting {0} {1} to {2}.{3}'.format(self._dirname, key, acr.collection, acr.resource))
+                    key = redirect_fqcr
+                # TODO: handle recursive forwarding (not necessary for builtin, but definitely for further collection redirs)
 
-        if not acr:
-            raise KeyError('invalid plugin name: {0}'.format(key))
+            func = self._collection_jinja_func_cache.get(key)
 
-        # FIXME: error handling for bogus plugin name, bogus impl, bogus filter/test
+            if func:
+                return func
 
-        pkg = import_module(acr.n_python_package_name)
+            acr = AnsibleCollectionRef.try_parse_fqcr(key, self._dirname)
 
-        parent_prefix = acr.collection
+            if not acr:
+                raise KeyError('invalid plugin name: {0}'.format(key))
 
-        if acr.subdirs:
-            parent_prefix = '{0}.{1}'.format(parent_prefix, acr.subdirs)
+            try:
+                pkg = import_module(acr.n_python_package_name)
+            except ImportError:
+                raise KeyError()
 
-        for dummy, module_name, ispkg in pkgutil.iter_modules(pkg.__path__, prefix=parent_prefix + '.'):
-            if ispkg:
-                continue
+            parent_prefix = acr.collection
 
-            plugin_impl = self._pluginloader.get(module_name)
+            if acr.subdirs:
+                parent_prefix = '{0}.{1}'.format(parent_prefix, acr.subdirs)
 
-            method_map = getattr(plugin_impl, self._method_map_name)
+            # TODO: implement collection-level redirect
 
-            for f in iteritems(method_map()):
-                fq_name = '.'.join((parent_prefix, f[0]))
-                # FIXME: detect/warn on intra-collection function name collisions
-                self._collection_jinja_func_cache[fq_name] = f[1]
+            for dummy, module_name, ispkg in pkgutil.iter_modules(pkg.__path__, prefix=parent_prefix + '.'):
+                if ispkg:
+                    continue
 
-        function_impl = self._collection_jinja_func_cache[key]
-        return function_impl
+                try:
+                    plugin_impl = self._pluginloader.get(module_name)
+                except Exception as e:
+                    raise TemplateSyntaxError(to_native(e), 0)
+
+                method_map = getattr(plugin_impl, self._method_map_name)
+
+                for f in iteritems(method_map()):
+                    fq_name = '.'.join((parent_prefix, f[0]))
+                    # FIXME: detect/warn on intra-collection function name collisions
+                    self._collection_jinja_func_cache[fq_name] = f[1]
+
+            function_impl = self._collection_jinja_func_cache[key]
+            return function_impl
+        except KeyError:
+            raise
+        except Exception as ex:
+            display.warning('an unexpected error occurred during Jinja2 environment setup: {0}'.format(to_native(ex)))
+            display.vvv('exception during Jinja2 environment setup: {0}'.format(format_exc()))
+            raise
 
     def __setitem__(self, key, value):
         return self._delegatee.__setitem__(key, value)
@@ -514,7 +574,7 @@ class Templar:
     def set_available_variables(self, variables):
         display.deprecated(
             'set_available_variables is being deprecated. Use "@available_variables.setter" instead.',
-            version='2.13'
+            version='ansible.builtin:2.13'
         )
         self.available_variables = variables
 

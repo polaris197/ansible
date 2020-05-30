@@ -5,6 +5,10 @@
 Ansible 2.10 Porting Guide
 **************************
 
+.. warning::
+
+	Links on this page may not point to the most recent versions of modules. In preparation for the release of 2.10, many plugins and modules have migrated to Collections on  `Ansible Galaxy <https://galaxy.ansible.com>`_. For the current development status of Collections and FAQ see `Ansible Collections Community Guide <https://github.com/ansible-collections/general/blob/master/README.rst>`_. We expect the 2.10 Porting Guide to change frequently up to the 2.10 release. Follow the conversations about collections on our various :ref:`communication` channels for the latest information on the status of the ``devel`` branch.
+
 This section discusses the behavioral changes between Ansible 2.9 and Ansible 2.10.
 
 It is intended to assist in updating your playbooks, plugins and other parts of your Ansible infrastructure so they will work with this version of Ansible.
@@ -19,7 +23,11 @@ This document is part of a collection on porting. The complete list of porting g
 Playbook
 ========
 
-No notable changes
+* Fixed a bug on boolean keywords that made random strings return 'False', now they should return an error if they are not a proper boolean
+  Example: `diff: yes-` was returning `False`.
+* A new fact, ``ansible_processor_nproc`` reflects the number of vcpus
+  available to processes (falls back to the number of vcpus available to
+  the scheduler).
 
 
 Command Line
@@ -39,6 +47,9 @@ Deprecated
 Modules
 =======
 
+.. warning::
+
+	Links on this page may not point to the most recent versions of modules. We will update them when we can.
 
 Modules removed
 ---------------
@@ -53,9 +64,8 @@ Deprecation notices
 
 The following modules will be removed in Ansible 2.14. Please update your playbooks accordingly.
 
-* ldap_attr use :ref:`ldap_attrs <ldap_attrs_module>` instead.
-* vyos_static_route use :ref:`vyos_static_routes <vyos_static_routes_module>` instead.
-
+* ldap_attr use ldap_attrs instead.
+* vyos_static_route use vyos_static_routes instead.
 
 The following functionality will be removed in Ansible 2.14. Please update update your playbooks accordingly.
 
@@ -95,7 +105,7 @@ The following functionality will change in Ansible 2.14. Please update update yo
 
 The following modules will be removed in Ansible 2.14. Please update your playbooks accordingly.
 
-* ``vmware_dns_config`` use :ref:`vmware_host_dns <vmware_host_dns_module>` instead.
+* ``vmware_dns_config`` use vmware_host_dns instead.
 
 
 Noteworthy module changes
@@ -141,6 +151,7 @@ Lookup plugin names case-sensitivity
 Noteworthy plugin changes
 -------------------------
 
+* Cache plugins in collections can be used to cache data from inventory plugins. Previously, cache plugins in collections could only be used for fact caching.
 * The ``hashi_vault`` lookup plugin now returns the latest version when using the KV v2 secrets engine. Previously, it returned all versions of the secret which required additional steps to extract and filter the desired version.
 * Some undocumented arguments from ``FILE_COMMON_ARGUMENTS`` have been removed; plugins using these, in particular action plugins, need to be adjusted. The undocumented arguments which were removed are ``src``, ``follow``, ``force``, ``content``, ``backup``, ``remote_src``, ``regexp``, ``delimiter``, and ``directory_mode``.
 

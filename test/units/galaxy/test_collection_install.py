@@ -12,6 +12,7 @@ import os
 import pytest
 import re
 import shutil
+import stat
 import tarfile
 import yaml
 
@@ -139,6 +140,12 @@ def collection_artifact(request, tmp_path_factory):
             galaxy_obj.write(to_bytes(yaml.safe_dump(existing_yaml)))
             galaxy_obj.truncate()
 
+    # Create a file with +x in the collection so we can test the permissions
+    execute_path = os.path.join(collection_path, 'runme.sh')
+    with open(execute_path, mode='wb') as fd:
+        fd.write(b"echo hi")
+    os.chmod(execute_path, os.stat(execute_path).st_mode | stat.S_IEXEC)
+
     call_galaxy_cli(['build', collection_path, '--output-path', test_dir])
 
     collection_tar = os.path.join(test_dir, '%s-%s-0.1.0.tar.gz' % (namespace, collection))
@@ -165,7 +172,7 @@ def test_build_requirement_from_path(collection_artifact):
     assert actual.dependencies == {}
 
 
-@pytest.mark.parametrize('version', ['1.1.1', 1.1, 1])
+@pytest.mark.parametrize('version', ['1.1.1', '1.1.0', '1.0.0'])
 def test_build_requirement_from_path_with_manifest(version, collection_artifact):
     manifest_path = os.path.join(collection_artifact[0], b'MANIFEST.json')
     manifest_value = json.dumps({
@@ -634,7 +641,12 @@ def test_install_collection(collection_artifact, monkeypatch):
 
     actual_files = os.listdir(collection_path)
     actual_files.sort()
-    assert actual_files == [b'FILES.json', b'MANIFEST.json', b'README.md', b'docs', b'playbooks', b'plugins', b'roles']
+    assert actual_files == [b'FILES.json', b'MANIFEST.json', b'README.md', b'docs', b'playbooks', b'plugins', b'roles',
+                            b'runme.sh']
+
+    assert stat.S_IMODE(os.stat(os.path.join(collection_path, b'plugins')).st_mode) == 0o0755
+    assert stat.S_IMODE(os.stat(os.path.join(collection_path, b'README.md')).st_mode) == 0o0644
+    assert stat.S_IMODE(os.stat(os.path.join(collection_path, b'runme.sh')).st_mode) == 0o0755
 
     assert mock_display.call_count == 1
     assert mock_display.mock_calls[0][1][0] == "Installing 'ansible_namespace.collection:0.1.0' to '%s'" \
@@ -668,7 +680,8 @@ def test_install_collection_with_download(galaxy_server, collection_artifact, mo
 
     actual_files = os.listdir(collection_path)
     actual_files.sort()
-    assert actual_files == [b'FILES.json', b'MANIFEST.json', b'README.md', b'docs', b'playbooks', b'plugins', b'roles']
+    assert actual_files == [b'FILES.json', b'MANIFEST.json', b'README.md', b'docs', b'playbooks', b'plugins', b'roles',
+                            b'runme.sh']
 
     assert mock_display.call_count == 1
     assert mock_display.mock_calls[0][1][0] == "Installing 'ansible_namespace.collection:0.1.0' to '%s'" \
@@ -689,14 +702,15 @@ def test_install_collections_from_tar(collection_artifact, monkeypatch):
     mock_display = MagicMock()
     monkeypatch.setattr(Display, 'display', mock_display)
 
-    collection.install_collections([(to_text(collection_tar), '*', None,)], to_text(temp_path),
+    collection.install_collections([(to_text(collection_tar), '*', None, None)], to_text(temp_path),
                                    [u'https://galaxy.ansible.com'], True, False, False, False, False)
 
     assert os.path.isdir(collection_path)
 
     actual_files = os.listdir(collection_path)
     actual_files.sort()
-    assert actual_files == [b'FILES.json', b'MANIFEST.json', b'README.md', b'docs', b'playbooks', b'plugins', b'roles']
+    assert actual_files == [b'FILES.json', b'MANIFEST.json', b'README.md', b'docs', b'playbooks', b'plugins', b'roles',
+                            b'runme.sh']
 
     with open(os.path.join(collection_path, b'MANIFEST.json'), 'rb') as manifest_obj:
         actual_manifest = json.loads(to_text(manifest_obj.read()))
@@ -721,23 +735,45 @@ def test_install_collections_existing_without_force(collection_artifact, monkeyp
     monkeypatch.setattr(Display, 'display', mock_display)
 
     # If we don't delete collection_path it will think the original build skeleton is installed so we expect a skip
-    collection.install_collections([(to_text(collection_tar), '*', None,)], to_text(temp_path),
+    collection.install_collections([(to_text(collection_tar), '*', None, None)], to_text(temp_path),
                                    [u'https://galaxy.ansible.com'], True, False, False, False, False)
 
     assert os.path.isdir(collection_path)
 
     actual_files = os.listdir(collection_path)
     actual_files.sort()
-    assert actual_files == [b'README.md', b'docs', b'galaxy.yml', b'playbooks', b'plugins', b'roles']
+    assert actual_files == [b'README.md', b'docs', b'galaxy.yml', b'playbooks', b'plugins', b'roles', b'runme.sh']
 
     # Filter out the progress cursor display calls.
     display_msgs = [m[1][0] for m in mock_display.mock_calls if 'newline' not in m[2] and len(m[1]) == 1]
-    assert len(display_msgs) == 4
-    # Msg1 is the warning about not MANIFEST.json, cannot really check message as it has line breaks which varies based
-    # on the path size
-    assert display_msgs[1] == "Process install dependency map"
-    assert display_msgs[2] == "Starting collection install process"
-    assert display_msgs[3] == "Skipping 'ansible_namespace.collection' as it is already installed"
+    assert len(display_msgs) == 3
+
+    assert display_msgs[0] == "Process install dependency map"
+    assert display_msgs[1] == "Starting collection install process"
+    assert display_msgs[2] == "Skipping 'ansible_namespace.collection' as it is already installed"
+
+    for msg in display_msgs:
+        assert 'WARNING' not in msg
+
+
+def test_install_missing_metadata_warning(collection_artifact, monkeypatch):
+    collection_path, collection_tar = collection_artifact
+    temp_path = os.path.split(collection_tar)[0]
+
+    mock_display = MagicMock()
+    monkeypatch.setattr(Display, 'display', mock_display)
+
+    for file in [b'MANIFEST.json', b'galaxy.yml']:
+        b_path = os.path.join(collection_path, file)
+        if os.path.isfile(b_path):
+            os.unlink(b_path)
+
+    collection.install_collections([(to_text(collection_tar), '*', None, None)], to_text(temp_path),
+                                   [u'https://galaxy.ansible.com'], True, False, False, False, False)
+
+    display_msgs = [m[1][0] for m in mock_display.mock_calls if 'newline' not in m[2] and len(m[1]) == 1]
+
+    assert 'WARNING' in display_msgs[0]
 
 
 # Makes sure we don't get stuck in some recursive loop
@@ -752,14 +788,15 @@ def test_install_collection_with_circular_dependency(collection_artifact, monkey
     mock_display = MagicMock()
     monkeypatch.setattr(Display, 'display', mock_display)
 
-    collection.install_collections([(to_text(collection_tar), '*', None,)], to_text(temp_path),
+    collection.install_collections([(to_text(collection_tar), '*', None, None)], to_text(temp_path),
                                    [u'https://galaxy.ansible.com'], True, False, False, False, False)
 
     assert os.path.isdir(collection_path)
 
     actual_files = os.listdir(collection_path)
     actual_files.sort()
-    assert actual_files == [b'FILES.json', b'MANIFEST.json', b'README.md', b'docs', b'playbooks', b'plugins', b'roles']
+    assert actual_files == [b'FILES.json', b'MANIFEST.json', b'README.md', b'docs', b'playbooks', b'plugins', b'roles',
+                            b'runme.sh']
 
     with open(os.path.join(collection_path, b'MANIFEST.json'), 'rb') as manifest_obj:
         actual_manifest = json.loads(to_text(manifest_obj.read()))

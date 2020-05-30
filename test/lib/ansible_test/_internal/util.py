@@ -173,13 +173,6 @@ def parse_parameterized_completion(value):
     return name, data
 
 
-def is_shippable():
-    """
-    :rtype: bool
-    """
-    return os.environ.get('SHIPPABLE') == 'true'
-
-
 def remove_file(path):
     """
     :type path: str
@@ -863,6 +856,16 @@ def paths_to_dirs(paths):  # type: (t.List[str]) -> t.List[str]
             dir_names.add(path + os.path.sep)
 
     return sorted(dir_names)
+
+
+def str_to_version(version):  # type: (str) -> t.Tuple[int]
+    """Return a version tuple from a version string."""
+    return tuple(int(n) for n in version.split('.'))
+
+
+def version_to_str(version):  # type: (t.Tuple[int]) -> str
+    """Return a version string from a version tuple."""
+    return '.'.join(str(n) for n in version)
 
 
 def import_plugins(directory, root=None):  # type: (str, t.Optional[str]) -> None

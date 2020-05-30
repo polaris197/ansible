@@ -77,6 +77,11 @@ def ansible_environment(args, color=True, ansible_config=None):
         PYTHONPATH=get_ansible_python_path(),
         PAGER='/bin/cat',
         PATH=path,
+        # give TQM worker processes time to report code coverage results
+        # without this the last task in a play may write no coverage file, an empty file, or an incomplete file
+        # enabled even when not using code coverage to surface warnings when worker processes do not exit cleanly
+        ANSIBLE_WORKER_SHUTDOWN_POLL_COUNT='100',
+        ANSIBLE_WORKER_SHUTDOWN_POLL_DELAY='0.1',
     )
 
     if isinstance(args, IntegrationConfig) and args.coverage:
@@ -113,9 +118,7 @@ def ansible_environment(args, color=True, ansible_config=None):
 
 def configure_plugin_paths(args):  # type: (CommonConfig) -> t.Dict[str, str]
     """Return environment variables with paths to plugins relevant for the current command."""
-    # temporarily require opt-in to this feature
-    # once collection migration has occurred this feature should always be enabled
-    if not isinstance(args, IntegrationConfig) or not args.enable_test_support:
+    if not isinstance(args, IntegrationConfig):
         return {}
 
     support_path = os.path.join(ANSIBLE_SOURCE_ROOT, 'test', 'support', args.command)
@@ -214,3 +217,36 @@ def check_pyyaml(args, version):
         display.warning('PyYAML will be slow due to installation without libyaml support for interpreter: %s' % python)
 
     return result
+
+
+class CollectionDetail:
+    """Collection detail."""
+    def __init__(self):  # type: () -> None
+        self.version = None  # type: t.Optional[str]
+
+
+class CollectionDetailError(ApplicationError):
+    """An error occurred retrieving collection detail."""
+    def __init__(self, reason):  # type: (str) -> None
+        super(CollectionDetailError, self).__init__('Error collecting collection detail: %s' % reason)
+        self.reason = reason
+
+
+def get_collection_detail(args, python):  # type: (EnvironmentConfig, str) -> CollectionDetail
+    """Return collection detail."""
+    collection = data_context().content.collection
+    directory = os.path.join(collection.root, collection.directory)
+
+    stdout = run_command(args, [python, os.path.join(ANSIBLE_TEST_DATA_ROOT, 'collection_detail.py'), directory], capture=True, always=True)[0]
+    result = json.loads(stdout)
+    error = result.get('error')
+
+    if error:
+        raise CollectionDetailError(error)
+
+    version = result.get('version')
+
+    detail = CollectionDetail()
+    detail.version = str(version) if version is not None else None
+
+    return detail

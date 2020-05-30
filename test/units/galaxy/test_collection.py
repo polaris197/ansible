@@ -9,6 +9,7 @@ __metaclass__ = type
 import json
 import os
 import pytest
+import re
 import tarfile
 import uuid
 
@@ -735,6 +736,27 @@ def test_extract_tar_file_missing_parent_dir(tmp_tarfile):
     os.path.isfile(output_file)
 
 
+def test_extract_tar_file_outside_dir(tmp_path_factory):
+    filename = u'ÅÑŚÌβŁÈ'
+    temp_dir = to_bytes(tmp_path_factory.mktemp('test-%s Collections' % to_native(filename)))
+    tar_file = os.path.join(temp_dir, to_bytes('%s.tar.gz' % filename))
+    data = os.urandom(8)
+
+    tar_filename = '../%s.sh' % filename
+    with tarfile.open(tar_file, 'w:gz') as tfile:
+        b_io = BytesIO(data)
+        tar_info = tarfile.TarInfo(tar_filename)
+        tar_info.size = len(data)
+        tar_info.mode = 0o0644
+        tfile.addfile(tarinfo=tar_info, fileobj=b_io)
+
+    expected = re.escape("Cannot extract tar entry '%s' as it will be placed outside the collection directory"
+                         % to_native(tar_filename))
+    with tarfile.open(tar_file, 'r') as tfile:
+        with pytest.raises(AnsibleError, match=expected):
+            collection._extract_tar_file(tfile, tar_filename, os.path.join(temp_dir, to_bytes(filename)), temp_dir)
+
+
 def test_require_one_of_collections_requirements_with_both():
     cli = GalaxyCLI(args=['ansible-galaxy', 'collection', 'verify', 'namespace.collection', '-r', 'requirements.yml'])
 
@@ -763,16 +785,16 @@ def test_require_one_of_collections_requirements_with_collections():
     cli = GalaxyCLI(args=['ansible-galaxy', 'collection', 'verify', 'namespace1.collection1', 'namespace2.collection1:1.0.0'])
     collections = ('namespace1.collection1', 'namespace2.collection1:1.0.0',)
 
-    requirements = cli._require_one_of_collections_requirements(collections, '')
+    requirements = cli._require_one_of_collections_requirements(collections, '')['collections']
 
-    assert requirements == [('namespace1.collection1', '*', None), ('namespace2.collection1', '1.0.0', None)]
+    assert requirements == [('namespace1.collection1', '*', None, None), ('namespace2.collection1', '1.0.0', None, None)]
 
 
 @patch('ansible.cli.galaxy.GalaxyCLI._parse_requirements_file')
 def test_require_one_of_collections_requirements_with_requirements(mock_parse_requirements_file, galaxy_server):
     cli = GalaxyCLI(args=['ansible-galaxy', 'collection', 'verify', '-r', 'requirements.yml', 'namespace.collection'])
     mock_parse_requirements_file.return_value = {'collections': [('namespace.collection', '1.0.5', galaxy_server)]}
-    requirements = cli._require_one_of_collections_requirements((), 'requirements.yml')
+    requirements = cli._require_one_of_collections_requirements((), 'requirements.yml')['collections']
 
     assert mock_parse_requirements_file.call_count == 1
     assert requirements == [('namespace.collection', '1.0.5', galaxy_server)]
@@ -816,7 +838,7 @@ def test_execute_verify_with_defaults(mock_verify_collections):
 
     requirements, search_paths, galaxy_apis, validate, ignore_errors = mock_verify_collections.call_args[0]
 
-    assert requirements == [('namespace.collection', '1.0.4', None)]
+    assert requirements == [('namespace.collection', '1.0.4', None, None)]
     for install_path in search_paths:
         assert install_path.endswith('ansible_collections')
     assert galaxy_apis[0].api_server == 'https://galaxy.ansible.com'
@@ -835,7 +857,7 @@ def test_execute_verify(mock_verify_collections):
 
     requirements, search_paths, galaxy_apis, validate, ignore_errors = mock_verify_collections.call_args[0]
 
-    assert requirements == [('namespace.collection', '1.0.4', None)]
+    assert requirements == [('namespace.collection', '1.0.4', None, None)]
     for install_path in search_paths:
         assert install_path.endswith('ansible_collections')
     assert galaxy_apis[0].api_server == 'http://galaxy-dev.com'
@@ -1132,6 +1154,25 @@ def test_verify_identical(monkeypatch, mock_collection, manifest_info, files_man
             assert mock_debug.call_args_list[-1][0][0] == success_msg
 
 
+@patch.object(os.path, 'isdir', return_value=True)
+def test_verify_collections_no_version(mock_isdir, mock_collection, monkeypatch):
+    namespace = 'ansible_namespace'
+    name = 'collection'
+    version = '*'  # Occurs if MANIFEST.json does not exist
+
+    local_collection = mock_collection(namespace=namespace, name=name, version=version)
+    monkeypatch.setattr(collection.CollectionRequirement, 'from_path', MagicMock(return_value=local_collection))
+
+    collections = [('%s.%s' % (namespace, name), version, None)]
+
+    with pytest.raises(AnsibleError) as err:
+        collection.verify_collections(collections, './', local_collection.api, False, False)
+
+    err_msg = 'Collection %s.%s does not appear to have a MANIFEST.json. ' % (namespace, name)
+    err_msg += 'A MANIFEST.json is expected if the collection has been built and installed via ansible-galaxy.'
+    assert err.value.message == err_msg
+
+
 @patch.object(collection.CollectionRequirement, 'verify')
 def test_verify_collections_not_installed(mock_verify, mock_collection, monkeypatch):
     namespace = 'ansible_namespace'
@@ -1143,7 +1184,7 @@ def test_verify_collections_not_installed(mock_verify, mock_collection, monkeypa
     found_remote = MagicMock(return_value=mock_collection(local=False))
     monkeypatch.setattr(collection.CollectionRequirement, 'from_name', found_remote)
 
-    collections = [('%s.%s' % (namespace, name), version, None)]
+    collections = [('%s.%s' % (namespace, name), version, None, None)]
     search_path = './'
     validate_certs = False
     ignore_errors = False
@@ -1186,10 +1227,13 @@ def test_verify_collections_not_installed_ignore_errors(mock_verify, mock_collec
 
 @patch.object(os.path, 'isdir', return_value=True)
 @patch.object(collection.CollectionRequirement, 'verify')
-def test_verify_collections_no_remote(mock_verify, mock_isdir, mock_collection):
+def test_verify_collections_no_remote(mock_verify, mock_isdir, mock_collection, monkeypatch):
     namespace = 'ansible_namespace'
     name = 'collection'
     version = '1.0.0'
+
+    monkeypatch.setattr(os.path, 'isfile', MagicMock(side_effect=[False, True]))
+    monkeypatch.setattr(collection.CollectionRequirement, 'from_path', MagicMock(return_value=mock_collection()))
 
     collections = [('%s.%s' % (namespace, name), version, None)]
     search_path = './'
@@ -1205,12 +1249,13 @@ def test_verify_collections_no_remote(mock_verify, mock_isdir, mock_collection):
 
 @patch.object(os.path, 'isdir', return_value=True)
 @patch.object(collection.CollectionRequirement, 'verify')
-def test_verify_collections_no_remote_ignore_errors(mock_verify, mock_isdir, mock_collection):
+def test_verify_collections_no_remote_ignore_errors(mock_verify, mock_isdir, mock_collection, monkeypatch):
     namespace = 'ansible_namespace'
     name = 'collection'
     version = '1.0.0'
 
-    local_collection = mock_collection(local_installed=False)
+    monkeypatch.setattr(os.path, 'isfile', MagicMock(side_effect=[False, True]))
+    monkeypatch.setattr(collection.CollectionRequirement, 'from_path', MagicMock(return_value=mock_collection()))
 
     collections = [('%s.%s' % (namespace, name), version, None)]
     search_path = './'
@@ -1270,12 +1315,13 @@ def test_verify_collections_url(monkeypatch):
     assert err.value.message == msg
 
 
-@patch.object(os.path, 'isfile', return_value=False)
 @patch.object(os.path, 'isdir', return_value=True)
 @patch.object(collection.CollectionRequirement, 'verify')
-def test_verify_collections_name(mock_verify, mock_isdir, mock_isfile, mock_collection, monkeypatch):
+def test_verify_collections_name(mock_verify, mock_isdir, mock_collection, monkeypatch):
     local_collection = mock_collection()
     monkeypatch.setattr(collection.CollectionRequirement, 'from_path', MagicMock(return_value=local_collection))
+
+    monkeypatch.setattr(os.path, 'isfile', MagicMock(side_effect=[False, True, False]))
 
     located_remote_from_name = MagicMock(return_value=mock_collection(local=False))
     monkeypatch.setattr(collection.CollectionRequirement, 'from_name', located_remote_from_name)

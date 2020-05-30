@@ -24,8 +24,7 @@ def assemble_files_to_ship(complete_file_list):
         '.github/*',
         '.github/*/*',
         'changelogs/fragments/*',
-        'hacking/aws_config/*',
-        'hacking/aws_config/*/*',
+        'hacking/backport/*',
         'hacking/shippable/*',
         'hacking/tests/*',
         'hacking/ticket_stubs/*',
@@ -34,10 +33,6 @@ def assemble_files_to_ship(complete_file_list):
         'test/utils/*/*',
         'test/utils/*/*/*',
         '.git*',
-        # Consciously left out
-        'examples/playbooks/*',
-        # Possibly should be included
-        'contrib/vault/*',
     )
     ignore_files = frozenset((
         # Developer-only tools
@@ -55,20 +50,20 @@ def assemble_files_to_ship(complete_file_list):
         'hacking/return_skeleton_generator.py',
         'hacking/test-module',
         'hacking/test-module.py',
+        'test/support/README.md',
         '.cherry_picker.toml',
         '.mailmap',
         # Possibly should be included
         'examples/scripts/uptime.py',
         'examples/DOCUMENTATION.yml',
+        'examples/play.yml',
         'examples/hosts.yaml',
         'examples/hosts.yml',
         'examples/inventory_script_schema.json',
         'examples/plugin_filters.yml',
         'hacking/env-setup',
         'hacking/env-setup.fish',
-        'CODING_GUIDELINES.md',
         'MANIFEST',
-        'MODULE_GUIDELINES.md',
     ))
 
     # These files are generated and then intentionally added to the sdist

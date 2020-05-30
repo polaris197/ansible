@@ -65,7 +65,9 @@ except ImportError:
 
 try:
     from systemd import journal
-    has_journal = True
+    # Makes sure that systemd.journal has method sendv()
+    # Double check that journal has method sendv (some packages don't)
+    has_journal = hasattr(journal, 'sendv')
 except ImportError:
     has_journal = False
 
@@ -78,6 +80,8 @@ except ImportError:
 
 # Python2 & 3 way to get NoneType
 NoneType = type(None)
+
+from ansible.module_utils.compat import selectors
 
 from ._text import to_native, to_bytes, to_text
 from ansible.module_utils.common.text.converters import (
@@ -406,8 +410,9 @@ def remove_values(value, no_log_strings):
         old_data, new_data = deferred_removals.popleft()
         if isinstance(new_data, Mapping):
             for old_key, old_elem in old_data.items():
+                new_key = _remove_values_conditions(old_key, no_log_strings, deferred_removals)
                 new_elem = _remove_values_conditions(old_elem, no_log_strings, deferred_removals)
-                new_data[old_key] = new_elem
+                new_data[new_key] = new_elem
         else:
             for elem in old_data:
                 new_elem = _remove_values_conditions(elem, no_log_strings, deferred_removals)
@@ -558,7 +563,7 @@ def missing_required_lib(library, reason=None, url=None):
     if url:
         msg += " See %s for more info." % url
 
-    msg += (" Please read module documentation and install in the appropriate location."
+    msg += (" Please read the module documentation and install it in the appropriate location."
             " If the required library is installed, but Ansible is using the wrong Python interpreter,"
             " please consult the documentation on ansible_python_interpreter")
     return msg
@@ -720,9 +725,16 @@ class AnsibleModule(object):
         warn(warning)
         self.log('[WARNING] %s' % warning)
 
-    def deprecate(self, msg, version=None):
-        deprecate(msg, version)
-        self.log('[DEPRECATION WARNING] %s %s' % (msg, version))
+    def deprecate(self, msg, version=None, date=None):
+        if version is not None and date is not None:
+            raise AssertionError("implementation error -- version and date must not both be set")
+        deprecate(msg, version=version, date=date)
+        # For compatibility, we accept that neither version nor date is set,
+        # and treat that the same as if version would haven been set
+        if date is not None:
+            self.log('[DEPRECATION WARNING] %s %s' % (msg, date))
+        else:
+            self.log('[DEPRECATION WARNING] %s %s' % (msg, version))
 
     def load_file_common_arguments(self, params, path=None):
         '''
@@ -1401,7 +1413,8 @@ class AnsibleModule(object):
 
         for deprecation in deprecated_aliases:
             if deprecation['name'] in param.keys():
-                deprecate("Alias '%s' is deprecated. See the module docs for more information" % deprecation['name'], deprecation['version'])
+                deprecate("Alias '%s' is deprecated. See the module docs for more information" % deprecation['name'],
+                          version=deprecation.get('version'), date=deprecation.get('date'))
         return alias_results
 
     def _handle_no_log_values(self, spec=None, param=None):
@@ -1417,7 +1430,7 @@ class AnsibleModule(object):
                                "%s" % to_native(te), invocation={'module_args': 'HIDDEN DUE TO FAILURE'})
 
         for message in list_deprecations(spec, param):
-            deprecate(message['msg'], message['version'])
+            deprecate(message['msg'], version=message.get('version'), date=message.get('date'))
 
     def _check_arguments(self, spec=None, param=None, legal_inputs=None):
         self._syslog_facility = 'LOG_USER'
@@ -2021,7 +2034,7 @@ class AnsibleModule(object):
                     if isinstance(d, SEQUENCETYPE) and len(d) == 2:
                         self.deprecate(d[0], version=d[1])
                     elif isinstance(d, Mapping):
-                        self.deprecate(d['msg'], version=d.get('version', None))
+                        self.deprecate(d['msg'], version=d.get('version', None), date=d.get('date', None))
                     else:
                         self.deprecate(d)  # pylint: disable=ansible-deprecated-no-version
             else:
@@ -2041,12 +2054,11 @@ class AnsibleModule(object):
         self._return_formatted(kwargs)
         sys.exit(0)
 
-    def fail_json(self, **kwargs):
+    def fail_json(self, msg, **kwargs):
         ''' return from the module, with an error message '''
 
-        if 'msg' not in kwargs:
-            raise AssertionError("implementation error -- msg to explain the error is required")
         kwargs['failed'] = True
+        kwargs['msg'] = msg
 
         # Add traceback if debug or high verbosity and it is missing
         # NOTE: Badly named as exception, it really always has been a traceback
@@ -2328,15 +2340,6 @@ class AnsibleModule(object):
             self.fail_json(msg='Could not write data to file (%s) from (%s): %s' % (dest, src, to_native(e)),
                            exception=traceback.format_exc())
 
-    def _read_from_pipes(self, rpipes, rfds, file_descriptor):
-        data = b('')
-        if file_descriptor in rfds:
-            data = os.read(file_descriptor.fileno(), self.get_buffer_size(file_descriptor))
-            if data == b(''):
-                rpipes.remove(file_descriptor)
-
-        return data
-
     def _clean_args(self, args):
 
         if not self._clean:
@@ -2566,9 +2569,14 @@ class AnsibleModule(object):
             # the communication logic here is essentially taken from that
             # of the _communicate() function in ssh.py
 
-            stdout = b('')
-            stderr = b('')
-            rpipes = [cmd.stdout, cmd.stderr]
+            stdout = b''
+            stderr = b''
+            selector = selectors.DefaultSelector()
+            selector.register(cmd.stdout, selectors.EVENT_READ)
+            selector.register(cmd.stderr, selectors.EVENT_READ)
+            if os.name == 'posix':
+                fcntl.fcntl(cmd.stdout.fileno(), fcntl.F_SETFL, fcntl.fcntl(cmd.stdout.fileno(), fcntl.F_GETFL) | os.O_NONBLOCK)
+                fcntl.fcntl(cmd.stderr.fileno(), fcntl.F_SETFL, fcntl.fcntl(cmd.stderr.fileno(), fcntl.F_GETFL) | os.O_NONBLOCK)
 
             if data:
                 if not binary_data:
@@ -2579,9 +2587,15 @@ class AnsibleModule(object):
                 cmd.stdin.close()
 
             while True:
-                rfds, wfds, efds = select.select(rpipes, [], rpipes, 1)
-                stdout += self._read_from_pipes(rpipes, rfds, cmd.stdout)
-                stderr += self._read_from_pipes(rpipes, rfds, cmd.stderr)
+                events = selector.select(1)
+                for key, event in events:
+                    b_chunk = key.fileobj.read()
+                    if b_chunk == b(''):
+                        selector.unregister(key.fileobj)
+                    if key.fileobj == cmd.stdout:
+                        stdout += b_chunk
+                    elif key.fileobj == cmd.stderr:
+                        stderr += b_chunk
                 # if we're checking for prompts, do it now
                 if prompt_re:
                     if prompt_re.search(stdout) and not data:
@@ -2591,12 +2605,12 @@ class AnsibleModule(object):
                 # only break out if no pipes are left to read or
                 # the pipes are completely read and
                 # the process is terminated
-                if (not rpipes or not rfds) and cmd.poll() is not None:
+                if (not events or not selector.get_map()) and cmd.poll() is not None:
                     break
                 # No pipes are left to read but process is not yet terminated
                 # Only then it is safe to wait for the process to be finished
-                # NOTE: Actually cmd.poll() is always None here if rpipes is empty
-                elif not rpipes and cmd.poll() is None:
+                # NOTE: Actually cmd.poll() is always None here if no selectors are left
+                elif not selector.get_map() and cmd.poll() is None:
                     cmd.wait()
                     # The process is terminated. Since no pipes to read from are
                     # left, there is no need to call select() again.
@@ -2604,6 +2618,7 @@ class AnsibleModule(object):
 
             cmd.stdout.close()
             cmd.stderr.close()
+            selector.close()
 
             rc = cmd.returncode
         except (OSError, IOError) as e:
